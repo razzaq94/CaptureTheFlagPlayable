@@ -3,7 +3,7 @@ Playable ad for Capture the Flag 3D game
 
 ## 🎮 Play the Game
 
-**Live Demo:** [https://YOUR_USERNAME.github.io/CaptureTheFlagPlayable/](https://YOUR_USERNAME.github.io/CaptureTheFlagPlayable/)
+**Live Demo:** [https://razzaq94.github.io/CaptureTheFlagPlayable/](https://YOUR_USERNAME.github.io/CaptureTheFlagPlayable/)
 
 *(Replace `YOUR_USERNAME` with your GitHub username)*
 
