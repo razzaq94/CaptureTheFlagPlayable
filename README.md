@@ -28,7 +28,7 @@ This game is deployed using GitHub Pages. To enable it:
 
 4. **Your game will be live at:**
    ```
-   https://YOUR_USERNAME.github.io/CaptureTheFlagPlayable/
+   https://razzaq94.github.io/CaptureTheFlagPlayable/
    ```
 
 ## 📱 Controls
