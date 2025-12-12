@@ -670,6 +670,8 @@ class Car {
     this.baseSpeed = BASE_SPEED;
     // AI bias: unique offset angle for each enemy to prevent merging
     this.aiBias = aiBias;
+    // Immunity timer: player gets 1 second of immunity after capturing flag
+    this.immunityTimer = 0;
 
     // Flag indicator (positioned relative to car model)
     // Use 3D flag model if available, otherwise fallback to sphere
@@ -702,7 +704,8 @@ class Car {
   }
 
   getSpeed() {
-    return this.baseSpeed * (this.hasFlag ? FLAG_SPEED_MULTIPLIER : 1);
+    const baseSpeedMultiplier = this.isPlayer ? 1.2 : 1.0; // Player is 20% faster
+    return this.baseSpeed * baseSpeedMultiplier * (this.hasFlag ? FLAG_SPEED_MULTIPLIER : 1);
   }
 
   setPosition(x, z) {
@@ -711,6 +714,12 @@ class Car {
 
   // Per-frame update: movement + rotation
   update(dt, world) {
+    // Update immunity timer (decrease over time)
+    if (this.immunityTimer > 0) {
+      this.immunityTimer -= dt;
+      if (this.immunityTimer < 0) this.immunityTimer = 0;
+    }
+    
     if (this.isPlayer) {
       if (input.left) this.angle -= TURN_SPEED * dt;
       if (input.right) this.angle += TURN_SPEED * dt;
@@ -909,14 +918,32 @@ function updateCollisions() {
       const b = world.cars[j];
       const d2 = a.mesh.position.distanceToSquared(b.mesh.position);
       if (d2 < COLLISION_RADIUS * COLLISION_RADIUS) {
+        // Check if player has immunity (1 second after capturing flag)
+        const aHasImmunity = a.isPlayer && a.immunityTimer > 0;
+        const bHasImmunity = b.isPlayer && b.immunityTimer > 0;
+        
         if (a.hasFlag && !b.hasFlag) {
-          a.hasFlag = false;
-          b.hasFlag = true;
-          world.flagHolder = b;
+          // Don't allow flag transfer if player (a) has immunity
+          if (!aHasImmunity) {
+            a.hasFlag = false;
+            b.hasFlag = true;
+            world.flagHolder = b;
+            // If player (b) just captured the flag, give them immunity
+            if (b.isPlayer) {
+              b.immunityTimer = 1.0; // 1 second immunity
+            }
+          }
         } else if (!a.hasFlag && b.hasFlag) {
-          b.hasFlag = false;
-          a.hasFlag = true;
-          world.flagHolder = a;
+          // Don't allow flag transfer if player (b) has immunity
+          if (!bHasImmunity) {
+            b.hasFlag = false;
+            a.hasFlag = true;
+            world.flagHolder = a;
+            // If player (a) just captured the flag, give them immunity
+            if (a.isPlayer) {
+              a.immunityTimer = 1.0; // 1 second immunity
+            }
+          }
         }
       }
     }
