@@ -906,7 +906,7 @@ class Car {
     this.baseSpeed = BASE_SPEED;
     // AI bias: unique offset angle for each enemy to prevent merging
     this.aiBias = aiBias;
-    // Immunity timer: player gets 1 second of immunity after capturing flag
+    // Immunity timer: cars get 0.5 seconds of immunity after capturing flag
     this.immunityTimer = 0;
 
     // Flag indicator (positioned relative to car model)
@@ -983,7 +983,7 @@ class Car {
   }
 
   // Simple AI:
-  // - If this car has the flag, it runs away from nearest chaser (car without flag)
+  // - If this car has the flag, it roams around the center of the map
   // - If it doesn't have the flag, it chases the current flag holder
   // Each enemy has a unique bias angle to prevent them from merging together
   updateAI(dt, world) {
@@ -992,29 +992,44 @@ class Car {
 
     const myPos = this.mesh.position;
     if (this.hasFlag) {
-      // run away from nearest car without flag
-      let nearest = null;
-      let nearestDist2 = Infinity;
-      for (const c of world.cars) {
-        if (c === this) continue;
-        if (!c.hasFlag) {
-          const d2 = myPos.distanceToSquared(c.mesh.position);
-          if (d2 < nearestDist2) {
-            nearestDist2 = d2;
-            nearest = c;
-          }
+      // Roam around the center of the map
+      const centerX = 0;
+      const centerZ = 0;
+      const distFromCenter = Math.sqrt(
+        Math.pow(myPos.x - centerX, 2) + Math.pow(myPos.z - centerZ, 2)
+      );
+      
+      // Define roaming radius (how far from center to patrol)
+      const ROAM_RADIUS = 200;
+      const RETURN_RADIUS = 400; // If beyond this, return to center area
+      
+      let targetAngle;
+      
+      if (distFromCenter > RETURN_RADIUS) {
+        // Too far from center, move towards center
+        const dir = new THREE.Vector2(
+          centerX - myPos.x,
+          centerZ - myPos.z
+        ).normalize();
+        targetAngle = Math.atan2(dir.y, dir.x);
+      } else {
+        // Near center, patrol in a circular pattern around center
+        // Use aiBias and time to create a unique roaming pattern for each enemy
+        const angleToCenter = Math.atan2(centerZ - myPos.z, centerX - myPos.x);
+        // Perpendicular angle (tangent to circle around center) + bias for variation
+        const patrolAngle = angleToCenter + Math.PI / 2 + this.aiBias;
+        // Add some time-based variation for smoother roaming
+        const timeVariation = world.time * 0.5 + this.aiBias;
+        targetAngle = patrolAngle + Math.sin(timeVariation) * 0.3;
+        
+        // If too close to center, move outward slightly
+        if (distFromCenter < ROAM_RADIUS * 0.5) {
+          targetAngle = angleToCenter + Math.PI; // Move away from center
         }
       }
-      if (nearest) {
-        const dir = new THREE.Vector2(
-          myPos.x - nearest.mesh.position.x,
-          myPos.z - nearest.mesh.position.z
-        ).normalize();
-        // Add bias to create variation in escape paths
-        const targetAngle = Math.atan2(dir.y, dir.x) + this.aiBias * 0.3;
-        // Enemies turn more slowly / imperfectly toward their target
-        this.angle = lerpAngle(this.angle, targetAngle, ENEMY_TURN_SPEED * dt);
-      }
+      
+      // Enemies turn more slowly / imperfectly toward their target
+      this.angle = lerpAngle(this.angle, targetAngle, ENEMY_TURN_SPEED * dt);
     } else {
       // chase flag holder with bias to prevent merging
       const dir = new THREE.Vector2(
@@ -1154,35 +1169,31 @@ function updateCollisions() {
       const b = world.cars[j];
       const d2 = a.mesh.position.distanceToSquared(b.mesh.position);
       if (d2 < COLLISION_RADIUS * COLLISION_RADIUS) {
-        // Check if player has immunity (1 second after capturing flag)
-        const aHasImmunity = a.isPlayer && a.immunityTimer > 0;
-        const bHasImmunity = b.isPlayer && b.immunityTimer > 0;
+        // Check if cars have immunity (0.5 seconds after capturing flag)
+        const aHasImmunity = a.immunityTimer > 0;
+        const bHasImmunity = b.immunityTimer > 0;
         
         if (a.hasFlag && !b.hasFlag) {
-          // Don't allow flag transfer if player (a) has immunity
+          // Don't allow flag transfer if car (a) has immunity
           if (!aHasImmunity) {
             a.hasFlag = false;
             b.hasFlag = true;
             world.flagHolder = b;
             // Play flag switch sound
             playFlagSwitchSound();
-            // If player (b) just captured the flag, give them immunity
-            if (b.isPlayer) {
-              b.immunityTimer = 1.0; // 1 second immunity
-            }
+            // Give immunity to the car that just captured the flag
+            b.immunityTimer = 0.5; // 0.5 seconds immunity
           }
         } else if (!a.hasFlag && b.hasFlag) {
-          // Don't allow flag transfer if player (b) has immunity
+          // Don't allow flag transfer if car (b) has immunity
           if (!bHasImmunity) {
             b.hasFlag = false;
             a.hasFlag = true;
             world.flagHolder = a;
             // Play flag switch sound
             playFlagSwitchSound();
-            // If player (a) just captured the flag, give them immunity
-            if (a.isPlayer) {
-              a.immunityTimer = 1.0; // 1 second immunity
-            }
+            // Give immunity to the car that just captured the flag
+            a.immunityTimer = 0.5; // 0.5 seconds immunity
           }
         }
       }
