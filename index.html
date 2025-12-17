@@ -476,6 +476,8 @@ const camera = new THREE.OrthographicCamera(
 );
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
+// Set pixel ratio to fix pixelation on mobile devices (cap at 2 for performance)
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 // Enable shadows with darker shadow color for more prominence
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap; // Soft shadows
@@ -491,6 +493,8 @@ window.addEventListener("resize", () => {
   camera.bottom = -frustumSize / 2;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  // Update pixel ratio on resize to maintain crisp rendering on mobile devices
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 });
 
 // Enhanced Lighting System
