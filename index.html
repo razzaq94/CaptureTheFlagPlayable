@@ -115,8 +115,29 @@
 
 <script>
 const GAME_DURATION = 60;
-const NUM_ENEMIES = 5;
+const NUM_ENEMIES = 1; // Only 1 AI car in multiplayer mode
 const WORLD_SIZE = 800 * 3; // Increased by 200% (3x original size)
+
+// Available colors for players (excluding red 0xff5c5c which is reserved for AI)
+const PLAYER_COLORS = [
+  0x3ec1ff, // Blue (original player color)
+  0x00ff00, // Green
+  0xffff00, // Yellow
+  0xff00ff, // Magenta
+  0x00ffff, // Cyan
+  0xffa500, // Orange
+  0x8000ff, // Purple
+  0xff1493, // Deep Pink
+  0x00ff7f, // Spring Green
+  0xff6347, // Tomato
+];
+
+// Multiplayer variables
+let myPlayerId = null;
+let myColor = null;
+let socket = null;
+let isConnected = false;
+let remotePlayers = new Map(); // playerId -> car object
 
 // Movement / turn speeds (increased by 300% from the original values)
 const BASE_SPEED = 60 * 3;
@@ -865,7 +886,7 @@ loadFlagModel();
 
 // Car class – represents both player and enemies
 class Car {
-  constructor(color, isPlayer = false, aiBias = 0) {
+  constructor(color, isPlayer = false, aiBias = 0, playerId = null) {
     // Use 3D model if available, otherwise fallback to box
     if (carModelTemplate) {
       // Clone the loaded model for this car instance
@@ -912,6 +933,8 @@ class Car {
     this.aiBias = aiBias;
     // Immunity timer: cars get 0.5 seconds of immunity after capturing flag
     this.immunityTimer = 0;
+    // Player ID for multiplayer (null for AI cars)
+    this.playerId = playerId;
 
     // Flag indicator (positioned relative to car model)
     // Use 3D flag model if available, otherwise fallback to sphere
@@ -1082,8 +1105,9 @@ function tryInitGame() {
     return; // Not ready yet
   }
   
-  initGame();
   gameInitialized = true;
+  // Initialize WebSocket connection (which will call initGame when connected)
+  initWebSocket();
 }
 
 // Update flag indicators on existing cars when flag model loads
@@ -1113,27 +1137,227 @@ function updateFlagIndicators() {
   });
 }
 
+// Initialize WebSocket connection
+function initWebSocket() {
+  // Replace with your WebSocket server URL
+  // For local testing: 'ws://localhost:8080'
+  // For production: 'wss://your-websocket-server.com/game'
+  const wsUrl = 'ws://localhost:8080';
+  
+  try {
+    socket = new WebSocket(wsUrl);
+    
+    socket.onopen = () => {
+      console.log('Connected to game server');
+      isConnected = true;
+      // Request to join the game
+      socket.send(JSON.stringify({ type: 'join' }));
+    };
+    
+    socket.onmessage = (event) => {
+      try {
+        const message = JSON.parse(event.data);
+        handleServerMessage(message);
+      } catch (e) {
+        console.error('Error parsing server message:', e);
+      }
+    };
+    
+    socket.onclose = () => {
+      console.log('Disconnected from game server');
+      isConnected = false;
+      // Attempt to reconnect after 3 seconds
+      setTimeout(initWebSocket, 3000);
+    };
+    
+    socket.onerror = (error) => {
+      console.error('WebSocket error:', error);
+    };
+  } catch (e) {
+    console.error('Failed to initialize WebSocket:', e);
+    // Fallback to single-player mode if WebSocket fails
+    setTimeout(() => {
+      if (!isConnected) {
+        console.log('WebSocket connection failed, starting in single-player mode');
+        myPlayerId = 'local';
+        myColor = PLAYER_COLORS[0];
+        initGame();
+      }
+    }, 2000);
+  }
+}
+
+// Handle messages from server
+function handleServerMessage(message) {
+  switch (message.type) {
+    case 'joined':
+      myPlayerId = message.playerId;
+      myColor = message.color;
+      console.log(`Joined as player ${myPlayerId} with color ${myColor.toString(16)}`);
+      initGame(); // Initialize game with assigned color
+      break;
+      
+    case 'playerJoined':
+      // Another player joined
+      addRemotePlayer(message.playerId, message.color, message.position);
+      break;
+      
+    case 'playerLeft':
+      // A player left
+      removeRemotePlayer(message.playerId);
+      break;
+      
+    case 'gameState':
+      // Update game state from server
+      updateGameState(message.state);
+      break;
+      
+    case 'flagTransfer':
+      // Flag was transferred
+      handleFlagTransfer(message.fromPlayerId, message.toPlayerId);
+      break;
+      
+    default:
+      console.log('Unknown message type:', message.type);
+  }
+}
+
+// Add remote player
+function addRemotePlayer(playerId, color, position) {
+  const car = new Car(color, false, 0, playerId);
+  car.setPosition(position.x || 0, position.z || 0);
+  car.angle = position.angle || 0;
+  remotePlayers.set(playerId, car);
+  world.cars.push(car);
+}
+
+// Remove remote player
+function removeRemotePlayer(playerId) {
+  const car = remotePlayers.get(playerId);
+  if (car) {
+    scene.remove(car.mesh);
+    const index = world.cars.indexOf(car);
+    if (index > -1) {
+      world.cars.splice(index, 1);
+    }
+    remotePlayers.delete(playerId);
+  }
+}
+
+// Update game state from server
+function updateGameState(state) {
+  // Update remote player positions
+  if (state.players) {
+    state.players.forEach(playerState => {
+      if (playerState.playerId === myPlayerId) {
+        // Don't update local player (we control it)
+        return;
+      }
+      
+      const car = remotePlayers.get(playerState.playerId);
+      if (car) {
+        car.mesh.position.set(playerState.x, 4, playerState.z);
+        car.angle = playerState.angle;
+        car.hasFlag = playerState.hasFlag;
+        car.flagIndicator.visible = car.hasFlag;
+      }
+    });
+  }
+  
+  // Update AI car
+  if (state.aiCar) {
+    const aiCar = world.cars.find(c => !c.isPlayer && !c.playerId);
+    if (aiCar) {
+      aiCar.mesh.position.set(state.aiCar.x, 4, state.aiCar.z);
+      aiCar.angle = state.aiCar.angle;
+      aiCar.hasFlag = state.aiCar.hasFlag;
+      aiCar.flagIndicator.visible = aiCar.hasFlag;
+    }
+  }
+  
+  // Update flag holder
+  if (state.flagHolderId !== undefined) {
+    if (state.flagHolderId === myPlayerId) {
+      world.flagHolder = player;
+    } else if (state.flagHolderId === 'ai') {
+      world.flagHolder = world.cars.find(c => !c.isPlayer && !c.playerId);
+    } else if (state.flagHolderId) {
+      world.flagHolder = remotePlayers.get(state.flagHolderId);
+    } else {
+      world.flagHolder = null;
+    }
+  }
+  
+  if (state.time !== undefined) world.time = state.time;
+  if (state.playerHoldTime !== undefined) world.playerHoldTime = state.playerHoldTime;
+  if (state.enemiesHoldTime !== undefined) world.enemiesHoldTime = state.enemiesHoldTime;
+  if (state.finished !== undefined) world.finished = state.finished;
+}
+
+// Handle flag transfer from server
+function handleFlagTransfer(fromPlayerId, toPlayerId) {
+  // Find the cars involved
+  let fromCar = null;
+  let toCar = null;
+  
+  if (fromPlayerId === myPlayerId) {
+    fromCar = player;
+  } else if (fromPlayerId === 'ai') {
+    fromCar = world.cars.find(c => !c.isPlayer && !c.playerId);
+  } else {
+    fromCar = remotePlayers.get(fromPlayerId);
+  }
+  
+  if (toPlayerId === myPlayerId) {
+    toCar = player;
+  } else if (toPlayerId === 'ai') {
+    toCar = world.cars.find(c => !c.isPlayer && !c.playerId);
+  } else {
+    toCar = remotePlayers.get(toPlayerId);
+  }
+  
+  if (fromCar && toCar) {
+    fromCar.hasFlag = false;
+    toCar.hasFlag = true;
+    world.flagHolder = toCar;
+    playFlagSwitchSound();
+    // Give immunity to the car that captured the flag
+    toCar.immunityTimer = 0.5;
+  }
+}
+
 function initGame() {
   // Clear any existing cars
   world.cars.forEach(car => {
     scene.remove(car.mesh);
   });
   world.cars = [];
+  remotePlayers.clear();
 
-  // Create player car
-  player = new Car(0x3ec1ff, true);
+  // Create AI car (always red)
+  const aiCar = new Car(0xff5c5c, false, 0);
+  const ang = Math.PI;
+  const r = 200;
+  aiCar.setPosition(Math.cos(ang) * r, Math.sin(ang) * r);
+  aiCar.angle = ang + Math.PI;
+  world.cars.push(aiCar);
+
+  // Create local player car with assigned color (or default if not connected)
+  if (myColor !== null) {
+    player = new Car(myColor, true, 0, myPlayerId);
+  } else {
+    // Fallback for single-player mode
+    player = new Car(PLAYER_COLORS[0], true, 0, 'local');
+    myColor = PLAYER_COLORS[0];
+    myPlayerId = 'local';
+  }
   player.setPosition(0, 0);
   world.cars.push(player);
 
-  // Create enemies with unique AI bias angles to prevent merging
-  for (let i = 0; i < NUM_ENEMIES; i++) {
-    const e = new Car(0xff5c5c, false, (i / NUM_ENEMIES) * Math.PI * 2);
-    const ang = (i / NUM_ENEMIES) * Math.PI * 2;
-    const r = 200;
-    e.setPosition(Math.cos(ang) * r, Math.sin(ang) * r);
-    e.angle = ang + Math.PI;
-    world.cars.push(e);
-  }
+  // Add remote players (if any)
+  remotePlayers.forEach((car, playerId) => {
+    world.cars.push(car);
+  });
 
   giveFlagToRandomCar();
 }
@@ -1245,19 +1469,52 @@ function loop(now) {
   lastTime = now;
 
   if (gameStarted && !world.finished) {
-    world.time += dt;
-    if (world.time >= GAME_DURATION) {
-      world.time = GAME_DURATION;
-      world.finished = true;
-      showEndOverlay();
+    // Send input to server if connected
+    if (isConnected && socket && socket.readyState === WebSocket.OPEN && player) {
+      socket.send(JSON.stringify({
+        type: 'input',
+        left: input.left,
+        right: input.right,
+        timestamp: now
+      }));
     }
+    
+    // Only update local game state if not connected (single-player mode)
+    // Otherwise, server will send game state updates
+    if (!isConnected) {
+      world.time += dt;
+      if (world.time >= GAME_DURATION) {
+        world.time = GAME_DURATION;
+        world.finished = true;
+        showEndOverlay();
+      }
 
-    world.cars.forEach(c => c.update(dt, world));
-    updateCollisions();
+      world.cars.forEach(c => c.update(dt, world));
+      updateCollisions();
 
-    if (world.flagHolder) {
-      if (world.flagHolder.isPlayer) world.playerHoldTime += dt;
-      else world.enemiesHoldTime += dt;
+      if (world.flagHolder) {
+        if (world.flagHolder.isPlayer) world.playerHoldTime += dt;
+        else world.enemiesHoldTime += dt;
+      }
+    } else {
+      // In multiplayer mode, still update local player movement for responsiveness
+      if (player) {
+        player.update(dt, world);
+      }
+      
+      // Update time locally (server will sync periodically)
+      world.time += dt;
+      if (world.time >= GAME_DURATION) {
+        world.time = GAME_DURATION;
+        world.finished = true;
+        showEndOverlay();
+      }
+      
+      // Update hold times locally
+      if (world.flagHolder) {
+        if (world.flagHolder.isPlayer) world.playerHoldTime += dt;
+        else world.enemiesHoldTime += dt;
+      }
     }
   }
 
